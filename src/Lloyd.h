@@ -14,9 +14,9 @@ struct LloydOptions {
 // ---------------------------------------------------------------------------
 // Lloyd namespace: one function per algorithm step.
 //
-// CC finding lives in ConnectedComponent.h; BFS primitives in BFS.h.
-// This namespace holds the Lloyd-specific clustering logic that builds
-// on top of those primitives.
+// CC finding lives in ConnectedComponent.h.
+// This namespace holds the Lloyd-specific clustering logic, including
+// BFS primitives that operate on the CSR graph.
 //
 // Graph convention everywhere:
 //   Gp  -- row pointers   (size G_N + 1)
@@ -24,6 +24,28 @@ struct LloydOptions {
 //   G_N -- number of vertices
 // ---------------------------------------------------------------------------
 namespace Lloyd {
+
+// Multi-source BFS on the full graph.
+// Expands from every vertex where dist[v] == 0, level by level.
+// After return:
+//   label[v] = label of the source that first reached v.
+//   dist[v]  = BFS distance from v to that source.
+void multi_source_bfs(
+    const int* Gp, const int* Gi, int G_N,
+    const std::vector<int>& source_vertices,
+    std::vector<int>& label,
+    std::vector<int>& dist);
+
+// Restricted multi-source BFS.
+// Same as above, but only expands into vertices where
+// restrict_mask[v] == cluster_id.  All other vertices are skipped.
+// Useful for intra-cluster BFS (e.g., from boundary inward).
+void restricted_bfs(
+    const int* Gp, const int* Gi, int G_N,
+    const std::vector<int>& restrict_mask,
+    int cluster_id,
+    std::vector<int>& label,
+    std::vector<int>& dist);
 
 // Step 3 -- Initial seed selection (across all CCs).
 // For each CC, pick ceil(|CC| / patch_size) random vertices as seeds.
@@ -52,7 +74,7 @@ void update_centers(
 // For every cluster whose size exceeds patch_size, add a new seed
 // (chosen from the deepest interior wave of that cluster).
 // Returns the number of new seeds added (0 means all clusters fit).
-int split_oversized(
+void merge_and_split_clusters(
     const int* Gp, const int* Gi, int G_N,
     const std::vector<int>& node_to_cluster,
     const std::vector<int>& cluster_sizes,

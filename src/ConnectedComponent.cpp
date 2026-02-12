@@ -1,7 +1,7 @@
 #include "ConnectedComponent.h"
 
 #include <spdlog/spdlog.h>
-// #include "BFS.h"  -- uncomment when implementing the TODO below
+// #include "Lloyd.h"  -- uncomment when implementing the TODO below
 
 namespace ConnectedComponent {
 
@@ -20,10 +20,10 @@ int compute(
     spdlog::info("The number of connected component is 1, for G_N={}", vertex_to_cc.size());
 
 
-    // TODO: implement BFS-based connected components using BFS::multi_source_bfs.
+    // TODO: implement BFS-based connected components using Lloyd::multi_source_bfs.
     //  - For each unvisited vertex v (vertex_to_cc[v] == -1):
     //      1. Set vertex_to_cc[v] = cc_id, prepare dist[v] = 0.
-    //      2. Call BFS::multi_source_bfs(Gp, Gi, G_N, vertex_to_cc, dist)
+    //      2. Call Lloyd::multi_source_bfs(Gp, Gi, G_N, vertex_to_cc, dist)
     //         (single source -- only v has dist == 0).
     //         This will label all reachable vertices with cc_id.
     //      3. Increment cc_id.

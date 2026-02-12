@@ -1,11 +1,119 @@
 #include "Lloyd.h"
-// #include "BFS.h"  -- uncomment when implementing the TODOs below
+#include "bit_array.h"
+#include <cmath>
+#include <random>
+#include <algorithm>
+#include <numeric>
 #include <cassert>
-// When implementing the TODOs below you will likely need:
-//   #include <algorithm>  -- for std::shuffle, std::min_element, etc.
-//   #include <random>     -- for std::mt19937
+#include <omp.h>
+#include <spdlog/spdlog.h>
 
 namespace Lloyd {
+
+// -----------------------------------------------------------------------
+// Multi-source BFS on the full graph.
+//
+// Precondition: caller has set label[s] and dist[s] = 0 for each source s.
+//               All other entries should be -1.
+// -----------------------------------------------------------------------
+void multi_source_bfs(
+    const int* Gp, const int* Gi, int G_N,
+    const std::vector<int>& source_vertices,
+    std::vector<int>& label,
+    std::vector<int>& dist)
+{
+    Lloyd::BitArray visited(G_N);
+    for (int s : source_vertices)
+        visited.set(s);
+
+    std::vector<int> current_queue(source_vertices.begin(), source_vertices.end());
+    std::vector<int> next_queue;
+
+    #pragma omp parallel
+    {
+        std::vector<int> local_next_queue;
+        while (!current_queue.empty()) {
+            #pragma omp for nowait
+            for (int i = 0; i < (int)current_queue.size(); i++) {
+                int v = current_queue[i];
+                for (int j = Gp[v]; j < Gp[v + 1]; j++) {
+                    int u = Gi[j];
+                    if (!visited.get(u)) {
+                        visited.set(u);
+                        if(dist[u] == -1) {
+                            label[u] = label[v];
+                            dist[u]  = dist[v] + 1;
+                            local_next_queue.push_back(u);
+                        }
+                    }
+                }
+            }
+            #pragma omp critical
+            {
+                next_queue.insert(next_queue.end(),
+                    local_next_queue.begin(), local_next_queue.end());
+                local_next_queue.clear();
+            }
+            #pragma omp barrier
+            #pragma omp single
+            {
+                std::swap(current_queue, next_queue);
+                next_queue.clear();
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Restricted multi-source BFS.
+//
+// Same as multi_source_bfs but only expands into vertices where
+// restrict_mask[v] == cluster_id.  Vertices outside the cluster are
+// never enqueued.
+// -----------------------------------------------------------------------
+void restricted_bfs(
+    const int* Gp, const int* Gi, int G_N,
+    const std::vector<int>& node_to_cluster,
+    const std::vector<int>& source_vertices,
+    std::vector<int>& final_wave_vertices,
+    std::vector<int>& dist)
+{
+
+    //Initialise visited set from the sources.
+    Lloyd::BitArray visited(G_N);
+    for (int s : source_vertices) {
+        visited.set(s);
+        dist[s] = 0;
+    }
+
+    //BFS level by level (same OpenMP structure as multi_source_bfs).
+    std::vector<int> current_queue(source_vertices.begin(), source_vertices.end());
+    std::vector<int> next_queue;
+    while (!current_queue.empty()) {
+        for (int i = 0; i < (int)current_queue.size(); i++) {
+            int v = current_queue[i];
+            int cluster_id = node_to_cluster[v];
+            for (int j = Gp[v]; j < Gp[v + 1]; j++) {
+                int u = Gi[j];
+                if (node_to_cluster[u] != cluster_id) continue; //Skip if the neighbor is not in the same cluster
+                if (!visited.get(u)) {
+                    visited.set(u);
+                    if (dist[u] == -1) {
+                        dist[u]  = dist[v] + 1;
+                        next_queue.push_back(u);
+                    }
+                }
+            }
+        }
+        if(next_queue.empty()) {
+            break;
+        }
+        std::swap(current_queue, next_queue);
+        next_queue.clear();
+    }
+    std::swap(current_queue, final_wave_vertices);
+    current_queue.clear();
+}
 
 // -----------------------------------------------------------------------
 // Step 3 -- Initial seed selection (across all CCs).
@@ -20,40 +128,33 @@ void initialize_seeds(
     std::vector<int>& seeds)
 {
     seeds.clear();
-
+    //Set the random seed
+    std::mt19937 rng(random_seed);
     //Generate random numbers based on the number of vertices in each CC
     std::vector<std::vector<int>> per_cc_seeds_ids(num_vertices_per_cc.size());
     for(int i = 0; i < num_vertices_per_cc.size(); i++) {
         //First: Compute how many seeds we need for this cc
         int num_seeds_for_cc = std::ceil(static_cast<double>(num_vertices_per_cc[i]) / static_cast<double>(patch_size));
         int num_vertices_in_cc = num_vertices_per_cc[i];
-        for(int j = 0; j < num_seeds_for_cc; j++) {
-            int random_seed = std::rand() % num_vertices_in_cc;
-            per_cc_seeds_ids[i].push_back(random_seed);
-        }
+
+        // Build index list [0, 1, ..., num_vertices_in_cc - 1]
+        std::vector<int> indices(num_vertices_in_cc);
+        std::iota(indices.begin(), indices.end(), 0);
+
+        // Shuffle and pick the first num_seeds_for_cc unique indices
+        std::shuffle(indices.begin(), indices.end(), rng);
+        per_cc_seeds_ids[i].assign(indices.begin(), indices.begin() + num_seeds_for_cc);
     }
-    //Now we have the seeds for each CC, we need to first extract the seed ids from the vertex_to_cc vector
-    //First create a pair of vertex, cc_id
-    std::vector<std::pair<int, int>> vertex_to_cc_pair;
-    for(int i = 0; i < vertex_to_cc.size(); i++) {
-        vertex_to_cc_pair.push_back(std::make_pair(i, vertex_to_cc[i]));
-    }
-    //Now sort the vector based on the cc_id
-    std::sort(vertex_to_cc_pair.begin(), vertex_to_cc_pair.end(), [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
-        return a.second < b.second;
-    });
-    
-    std::vector<int> cumulative_num_vertices_per_cc(num_vertices_per_cc.size() + 1, 0);
-    for(int i = 0; i < vertex_to_cc_pair.size(); i++) {
-        cumulative_num_vertices_per_cc[i + 1] = cumulative_num_vertices_per_cc[i] + num_vertices_per_cc[i];
+    // Group vertices by their CC
+    std::vector<std::vector<int>> cc_vertices(num_vertices_per_cc.size());
+    for (int i = 0; i < static_cast<int>(vertex_to_cc.size()); i++) {
+        cc_vertices[vertex_to_cc[i]].push_back(i);
     }
 
-    //Now we can extract the seeds for each CC
-    for(int cc = 0; cc < num_vertices_per_cc.size(); cc++) {
-        for(int seed_id : per_cc_seeds_ids[cc]) {
-            int offset = cumulative_num_vertices_per_cc[cc];
-            int seed_vertex = seed_id + offset;
-            seeds.push_back(vertex_to_cc_pair[seed_vertex].first);
+    // Map seed indices to actual vertex ids
+    for (int cc = 0; cc < static_cast<int>(num_vertices_per_cc.size()); cc++) {
+        for (int seed_id : per_cc_seeds_ids[cc]) {
+            seeds.push_back(cc_vertices[cc][seed_id]);
         }
     }
 }
@@ -75,19 +176,38 @@ void update_centers(
     int random_seed,
     std::vector<int>& seeds)
 {
-    // TODO: implement center update using BFS::restricted_bfs.
-    //  - For each cluster i in [0, num_clusters):
-    //      1. Collect boundary vertices: v in cluster i where at least one
-    //         neighbour (via Gp/Gi) has node_to_cluster[neighbour] != i.
-    //      2. Prepare label/dist arrays (sized G_N, init to -1).
-    //         Set label[b] = 0, dist[b] = 0 for each boundary vertex b.
-    //      3. Call BFS::restricted_bfs(Gp, Gi, G_N,
-    //                                  node_to_cluster, i, label, dist).
-    //      4. Find the maximum distance in dist[] (the deepest wave).
-    //         Collect W_last = vertices with that max distance.
-    //      5. Pick seeds[i] = a vertex from W_last.
-    //         (Use random_seed + i to seed the random choice, or just
-    //          pick the vertex with the smallest id for determinism.)
+    //Find the center per each cluster
+    //Step 0: Find all the boundary vertices
+    std::vector<std::vector<int>> per_cluster_boundary_vertices(num_clusters);
+    for(int v = 0; v < G_N; v++) {
+        for(int j = Gp[v]; j < Gp[v + 1]; j++) {
+            int nbr_v = Gi[j];
+            if(node_to_cluster[nbr_v] != node_to_cluster[v]) {
+                per_cluster_boundary_vertices[node_to_cluster[v]].push_back(v);
+                break;
+            }
+        }
+    }
+
+    //Step 1: Run the restricted BFS from the boundary vertices
+    //only nbrs with the same cluster id are considered for each boundary vertex
+    std::vector<int> dist(G_N, -1);
+    seeds.clear();
+    for(int i = 0; i < num_clusters; i++) {
+        std::vector<int> final_wave_vertices;
+        Lloyd::restricted_bfs(Gp, Gi, G_N, node_to_cluster, per_cluster_boundary_vertices[i], final_wave_vertices, dist);
+        //Pick a random new seed from the final wave vertices
+        std::mt19937 rng(random_seed + i);
+        std::uniform_int_distribution<int> dist_rng(0, final_wave_vertices.size() - 1);
+        int new_seed = final_wave_vertices[dist_rng(rng)];
+        seeds.push_back(new_seed);
+    }
+
+#ifndef NDEBUG
+    for (int i = 0; i < G_N; i++) {
+        assert(dist[i] != -1);
+    }
+#endif
 }
 
 // -----------------------------------------------------------------------
@@ -96,7 +216,7 @@ void update_centers(
 // After some Lloyd iterations, any cluster larger than patch_size gets
 // an extra seed injected at its deepest interior vertex.
 // -----------------------------------------------------------------------
-int split_oversized(
+void merge_and_split_clusters(
     const int* Gp, const int* Gi, int G_N,
     const std::vector<int>& node_to_cluster,
     const std::vector<int>& cluster_sizes,
@@ -105,22 +225,31 @@ int split_oversized(
     int random_seed,
     std::vector<int>& seeds)
 {
-    int added = 0;
+    int split_clusters = 0;
+    int merge_clusters = 0;
 
-    // TODO: implement oversized-cluster splitting using BFS::restricted_bfs.
-    //  - cluster_sizes[i] is already provided (number of vertices in cluster i).
-    //  - For every cluster i with cluster_sizes[i] > patch_size:
-    //      1. Find its boundary vertices (same as in update_centers).
-    //      2. Prepare label/dist arrays (sized G_N, init to -1).
-    //         Set label[b] = 0, dist[b] = 0 for each boundary vertex b.
-    //      3. Call BFS::restricted_bfs(Gp, Gi, G_N,
-    //                                  node_to_cluster, i, label, dist).
-    //      4. Find W_last (vertices with max distance).
-    //         Pick a new seed from W_last, append it to seeds[].
-    //      5. Increment added.
-    //  - Return added (0 means convergence: all clusters fit).
 
-    return added;
+    //Go through the seeds, and add a seed to neighbors of that seed
+    //if the neighbor is in the same cluster and 
+    //the cluster size is more than patch_size
+    //then add a new seed to the neighbor
+    std::vector<int> added_seeds;
+    for(int i = 0; i < seeds.size(); i++) {
+        int seed = seeds[i];
+        int cluster_id = node_to_cluster[seed];
+        if (cluster_sizes[cluster_id] < patch_size) {
+            continue;
+        }
+        for(int j = Gp[seed]; j < Gp[seed + 1]; j++) {
+            int neighbor = Gi[j];
+            if(node_to_cluster[neighbor] == cluster_id) {
+                added_seeds.push_back(neighbor);
+                break;
+            }
+        }
+    }
+    //Merge added seeds into the seeds
+    seeds.insert(seeds.end(), added_seeds.begin(), added_seeds.end());
 }
 
 } // namespace Lloyd

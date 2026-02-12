@@ -16,6 +16,7 @@
 
 #include "remove_diagonal.h"
 #include "clusterAPI.h"
+#include "polyscope_visualizer.h"
 
 struct CLIArgs
 {
@@ -189,6 +190,10 @@ int main(int argc, char* argv[])
     spdlog::info("========================================");
     spdlog::info("Done!");
     spdlog::info("========================================");
+
+
+    // Visualize the clusters
+    PatchVisualizer::visualize_patches(V, F, vertex_to_cluster, is_tet_mesh);
 
     return 0;
 }

@@ -51,12 +51,13 @@ include(eigen)
 include(libigl)
 include(spdlog)
 include(cli11)
+include(polyscope)
 
 # ── Library: fast_patcher_lib (Lloyd clustering + helpers) ─────────────────
 file(GLOB LIB_SOURCES src/*.cpp)
 add_library(fast_patcher_lib STATIC ${LIB_SOURCES})
 target_include_directories(fast_patcher_lib PUBLIC src/)
-target_link_libraries(fast_patcher_lib PUBLIC fast_patcher_flags spdlog::spdlog)
+target_link_libraries(fast_patcher_lib PUBLIC fast_patcher_flags spdlog::spdlog OpenMP::OpenMP_CXX)
 
 # Debug/Release definitions: DEBUG defined in Debug, NDEBUG in Release
 target_compile_definitions(fast_patcher_lib PUBLIC
@@ -73,4 +74,5 @@ target_link_libraries(test_cluster PRIVATE
     Eigen3::Eigen
     spdlog::spdlog
     CLI11::CLI11
+    polyscope
 )

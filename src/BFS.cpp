@@ -12,6 +12,7 @@ namespace BFS {
 // -----------------------------------------------------------------------
 void multi_source_bfs(
     const int* Gp, const int* Gi, int G_N,
+    const std::vector<int>& source_vertices,
     std::vector<int>& label,
     std::vector<int>& dist)
 {

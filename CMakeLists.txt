@@ -5,6 +5,28 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# ── Compiler flags ─────────────────────────────────────────────────────────
+# NOTE: Inside generator expressions, flags MUST be semicolon-separated
+#       (spaces are treated as literal characters, not list separators).
+set(cxx_flags
+    $<$<CXX_COMPILER_ID:MSVC>:-D_SCL_SECURE_NO_WARNINGS;/openmp:experimental;/MP;/std:c++17;/bigobj>
+    $<$<AND:$<CXX_COMPILER_ID:GNU>,$<CONFIG:Release>>:-Wall;-m64;-fopenmp;-O3;-Wno-unused-function>
+    $<$<AND:$<CXX_COMPILER_ID:GNU>,$<CONFIG:Debug>>:-Wall;-m64;-fopenmp;-O0;-g3;-fno-inline;-Wno-unused-function>
+    $<$<AND:$<CXX_COMPILER_ID:AppleClang>,$<CONFIG:Release>>:-Wall;-O3;-Wno-unused-function>
+    $<$<AND:$<CXX_COMPILER_ID:AppleClang>,$<CONFIG:Debug>>:-Wall;-O0;-g3;-fno-inline;-fno-omit-frame-pointer;-Wno-unused-function>
+    $<$<AND:$<CXX_COMPILER_ID:Clang>,$<NOT:$<CXX_COMPILER_ID:AppleClang>>,$<CONFIG:Release>>:-Wall;-m64;-fopenmp;-O3;-Wno-unused-function>
+    $<$<AND:$<CXX_COMPILER_ID:Clang>,$<NOT:$<CXX_COMPILER_ID:AppleClang>>,$<CONFIG:Debug>>:-Wall;-m64;-fopenmp;-O0;-g3;-fno-inline;-Wno-unused-function>
+)
+
+add_library(fast_patcher_flags INTERFACE)
+target_compile_options(fast_patcher_flags INTERFACE
+    $<$<COMPILE_LANGUAGE:CXX>:${cxx_flags}>
+)
+
+# Ensure CMake's built-in Debug flags also use -O0 -g3
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3" CACHE STRING "C++ Debug flags" FORCE)
+set(CMAKE_C_FLAGS_DEBUG "-O0 -g3" CACHE STRING "C Debug flags" FORCE)
+
 # ── Third-party dependencies (fetched via cmake/recipes/) ──────────────────
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/recipes")
 
@@ -34,6 +56,13 @@ include(cli11)
 file(GLOB LIB_SOURCES src/*.cpp)
 add_library(fast_patcher_lib STATIC ${LIB_SOURCES})
 target_include_directories(fast_patcher_lib PUBLIC src/)
+target_link_libraries(fast_patcher_lib PUBLIC fast_patcher_flags spdlog::spdlog)
+
+# Debug/Release definitions: DEBUG defined in Debug, NDEBUG in Release
+target_compile_definitions(fast_patcher_lib PUBLIC
+    $<$<CONFIG:Debug>:DEBUG>
+    $<$<CONFIG:Release>:NDEBUG>
+)
 
 # ── Demo executable ────────────────────────────────────────────────────────
 add_executable(test_cluster demo/test_cluster.cpp)

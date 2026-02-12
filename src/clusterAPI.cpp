@@ -59,7 +59,7 @@ void create_clusters(
                 node_to_cluster[seeds[i]] = i;
                 dist[seeds[i]] = 0;
             }
-            BFS::multi_source_bfs(Gp, Gi, n, node_to_cluster, dist);
+            BFS::multi_source_bfs(Gp, Gi, n, seeds, node_to_cluster, dist);
 
             //Compute the maximum size of the clusters
             int max_cluster_size = 0;

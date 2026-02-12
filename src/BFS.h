@@ -23,6 +23,7 @@ namespace BFS {
 //   dist[v]  = BFS distance from v to that source.
 void multi_source_bfs(
     const int* Gp, const int* Gi, int G_N,
+    const std::vector<int>& source_vertices,
     std::vector<int>& label,
     std::vector<int>& dist);
 

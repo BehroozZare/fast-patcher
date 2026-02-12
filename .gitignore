@@ -12,7 +12,6 @@ cmake-build-*/
 
 # Compiled objects
 *.o
-*.obj
 *.a
 *.lib
 *.so

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <numeric>
+#include <tuple>
 
 #include "remove_diagonal.h"
 #include "clusterAPI.h"
@@ -23,6 +24,8 @@ struct CLIArgs
     std::string input_mesh;
     std::string output_dir = "./output";
     int patch_size = 512;
+    std::string seed_method = "morton";
+    int lloyd_iters_to_add_seed = 2;
 
     CLIArgs(int argc, char* argv[])
     {
@@ -30,6 +33,8 @@ struct CLIArgs
         app.add_option("-i,--input", input_mesh, "input mesh file (.mesh for tet, .obj/.off/.ply/.stl for triangle)")->required();
         app.add_option("-o,--output", output_dir, "output directory for patch files");
         app.add_option("-z,--patch_size", patch_size, "maximum patch size");
+        app.add_option("-s,--seed", seed_method, "seed selection method: 'random' or 'morton' (default: morton)");
+        app.add_option("-l,--lloyd_iters", lloyd_iters_to_add_seed, "Lloyd iterations before checking oversized clusters (default: 2)");
 
         try {
             app.parse(argc, argv);
@@ -146,6 +151,21 @@ int main(int argc, char* argv[])
     spdlog::info("Running Lloyd clustering...");
     spdlog::info("========================================");
 
+    // Convert vertex positions for morton code seed selection
+    std::vector<std::tuple<double,double,double>> vertex_positions(num_vertices);
+    for (int i = 0; i < num_vertices; i++)
+        vertex_positions[i] = {V(i,0), V(i,1), V(i,2)};
+
+    LloydOptions opts;
+    if (args.seed_method == "morton") {
+        opts.seed_selection_method = LloydOptions::SeedSelectionMethod::MORTON_CODE;
+    } else {
+        opts.seed_selection_method = LloydOptions::SeedSelectionMethod::RANDOM;
+    }
+    opts.lloyd_iters_to_add_seed = args.lloyd_iters_to_add_seed;
+    spdlog::info("Seed selection method: {}", args.seed_method);
+    spdlog::info("Lloyd iters to add seed: {}", opts.lloyd_iters_to_add_seed);
+
     // Time the clustering
     auto start = std::chrono::high_resolution_clock::now();
     std::vector<int> vertex_to_cluster;
@@ -154,8 +174,9 @@ int main(int argc, char* argv[])
         Gp.data(),
         Gi.data(),
         args.patch_size,
-        nullptr,
-        vertex_to_cluster);
+        &opts,
+        vertex_to_cluster,
+        &vertex_positions);
     auto end = std::chrono::high_resolution_clock::now();
     double runtime_ms = std::chrono::duration<double, std::milli>(end - start).count();
     
@@ -193,7 +214,7 @@ int main(int argc, char* argv[])
 
 
     // Visualize the clusters
-    PatchVisualizer::visualize_patches(V, F, vertex_to_cluster, is_tet_mesh);
+    PatchVisualizer::visualize_patches(V, F, vertex_to_cluster, is_tet_mesh, args.patch_size);
 
     return 0;
 }

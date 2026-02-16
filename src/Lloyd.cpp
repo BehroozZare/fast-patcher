@@ -20,7 +20,8 @@ void multi_source_bfs(
     const int* Gp, const int* Gi, int G_N,
     const std::vector<int>& source_vertices,
     std::vector<int>& label,
-    std::vector<int>& dist)
+    std::vector<int>& dist,
+    const BitArray* active_mask)
 {
     Lloyd::BitArray visited(G_N);
     for (int s : source_vertices)
@@ -38,6 +39,7 @@ void multi_source_bfs(
                 int v = current_queue[i];
                 for (int j = Gp[v]; j < Gp[v + 1]; j++) {
                     int u = Gi[j];
+                    if (active_mask && !active_mask->get(u)) continue;
                     if (!visited.get(u)) {
                         visited.set(u);
                         if(dist[u] == -1) {
@@ -76,7 +78,8 @@ void restricted_bfs(
     const std::vector<int>& node_to_cluster,
     const std::vector<int>& source_vertices,
     std::vector<int>& final_wave_vertices,
-    std::vector<int>& dist)
+    std::vector<int>& dist,
+    const BitArray* active_mask)
 {
 
     //Initialise visited set from the sources.
@@ -95,7 +98,8 @@ void restricted_bfs(
             int cluster_id = node_to_cluster[v];
             for (int j = Gp[v]; j < Gp[v + 1]; j++) {
                 int u = Gi[j];
-                if (node_to_cluster[u] != cluster_id) continue; //Skip if the neighbor is not in the same cluster
+                if (active_mask && !active_mask->get(u)) continue;
+                if (node_to_cluster[u] != cluster_id) continue;
                 if (!visited.get(u)) {
                     visited.set(u);
                     if (dist[u] == -1) {
@@ -120,16 +124,16 @@ void restricted_bfs(
 //
 // For each CC, pick ceil(|CC| / patch_size) random vertices as seeds.
 // -----------------------------------------------------------------------
-void initialize_seeds(
+void initialize_seeds_random(
     const std::vector<int>& vertex_to_cc,
     const std::vector<int>& num_vertices_per_cc,
     int patch_size,
-    int random_seed,
+    const LloydOptions& opt,
     std::vector<int>& seeds)
 {
     seeds.clear();
     //Set the random seed
-    std::mt19937 rng(random_seed);
+    std::mt19937 rng(opt.random_seed);
     //Generate random numbers based on the number of vertices in each CC
     std::vector<std::vector<int>> per_cc_seeds_ids(num_vertices_per_cc.size());
     for(int i = 0; i < num_vertices_per_cc.size(); i++) {
@@ -173,13 +177,15 @@ void update_centers(
     const int* Gp, const int* Gi, int G_N,
     const std::vector<int>& node_to_cluster,
     int num_clusters,
-    int random_seed,
-    std::vector<int>& seeds)
+    const LloydOptions& opt,
+    std::vector<int>& seeds,
+    const BitArray* active_mask)
 {
     //Find the center per each cluster
     //Step 0: Find all the boundary vertices
     std::vector<std::vector<int>> per_cluster_boundary_vertices(num_clusters);
     for(int v = 0; v < G_N; v++) {
+        if (active_mask && !active_mask->get(v)) continue;
         for(int j = Gp[v]; j < Gp[v + 1]; j++) {
             int nbr_v = Gi[j];
             if(node_to_cluster[nbr_v] != node_to_cluster[v]) {
@@ -192,24 +198,106 @@ void update_centers(
     //Step 1: Run the restricted BFS from the boundary vertices
     //only nbrs with the same cluster id are considered for each boundary vertex
     std::vector<int> dist(G_N, -1);
-    seeds.clear();
+    #pragma omp parallel for
     for(int i = 0; i < num_clusters; i++) {
+        if (active_mask && !active_mask->get(seeds[i])) continue;
         std::vector<int> final_wave_vertices;
-        Lloyd::restricted_bfs(Gp, Gi, G_N, node_to_cluster, per_cluster_boundary_vertices[i], final_wave_vertices, dist);
+        Lloyd::restricted_bfs(Gp, Gi, G_N, node_to_cluster, per_cluster_boundary_vertices[i], final_wave_vertices, dist, active_mask);
         //Pick a random new seed from the final wave vertices
-        std::mt19937 rng(random_seed + i);
+        std::mt19937 rng(opt.random_seed + i);
         std::uniform_int_distribution<int> dist_rng(0, final_wave_vertices.size() - 1);
-        int new_seed = final_wave_vertices[dist_rng(rng)];
-        seeds.push_back(new_seed);
+        seeds[i] = final_wave_vertices[dist_rng(rng)];
     }
-
-#ifndef NDEBUG
-    for (int i = 0; i < G_N; i++) {
-        assert(dist[i] != -1);
-    }
-#endif
 }
 
+
+int morton_code(int x, int y, int z, int morton_code_bits_per_dimension) {
+    int morton_code = 0;
+    for(int i = 0; i < morton_code_bits_per_dimension; i++) {
+        morton_code |= (x & (1 << i)) << (2 * i);
+        morton_code |= (y & (1 << i)) << (2 * i + 1);
+        morton_code |= (z & (1 << i)) << (2 * i + 2);
+    }
+    return morton_code;
+}
+
+// -----------------------------------------------------------------------
+// Step 3 -- Initial seed selection (across all CCs).
+//
+// For each CC, pick ceil(|CC| / patch_size) random vertices as seeds.
+// -----------------------------------------------------------------------
+void initialize_seeds_morton_code(
+    const std::vector<int>& vertex_to_cc,
+    const std::vector<int>& num_vertices_per_cc,
+    const std::vector<std::tuple<double, double, double>>& vertex_positions,
+    int patch_size,
+    const LloydOptions& opt,
+    std::vector<int>& seeds)
+{
+    seeds.clear();
+    //Set the random seed
+    std::mt19937 rng(opt.random_seed);
+    int morton_range = (1 << opt.morton_code_bits_per_dimension) - 1;
+    // Group vertices by their CC
+    std::vector<std::vector<int>> cc_vertices(num_vertices_per_cc.size());
+    for (int i = 0; i < static_cast<int>(vertex_to_cc.size()); i++) {
+        cc_vertices[vertex_to_cc[i]].push_back(i);
+    }
+
+    // Map seed indices to actual vertex ids
+    for (int cc = 0; cc < static_cast<int>(cc_vertices.size()); cc++) {
+        int num_seeds_for_cc = std::ceil(static_cast<double>(num_vertices_per_cc[cc]) / static_cast<double>(patch_size));
+
+        // Compute per-CC bounding box
+        double cc_min_x = std::get<0>(vertex_positions[cc_vertices[cc][0]]);
+        double cc_min_y = std::get<1>(vertex_positions[cc_vertices[cc][0]]);
+        double cc_min_z = std::get<2>(vertex_positions[cc_vertices[cc][0]]);
+        double cc_max_x = cc_min_x, cc_max_y = cc_min_y, cc_max_z = cc_min_z;
+        for (int i = 1; i < num_vertices_per_cc[cc]; i++) {
+            int vid = cc_vertices[cc][i];
+            double x = std::get<0>(vertex_positions[vid]);
+            double y = std::get<1>(vertex_positions[vid]);
+            double z = std::get<2>(vertex_positions[vid]);
+            cc_min_x = std::min(cc_min_x, x); cc_max_x = std::max(cc_max_x, x);
+            cc_min_y = std::min(cc_min_y, y); cc_max_y = std::max(cc_max_y, y);
+            cc_min_z = std::min(cc_min_z, z); cc_max_z = std::max(cc_max_z, z);
+        }
+        double ext_x = cc_max_x - cc_min_x; if (ext_x == 0.0) ext_x = 1.0;
+        double ext_y = cc_max_y - cc_min_y; if (ext_y == 0.0) ext_y = 1.0;
+        double ext_z = cc_max_z - cc_min_z; if (ext_z == 0.0) ext_z = 1.0;
+
+        // Quantize positions and compute morton codes
+        std::vector<int> morton_codes(num_vertices_per_cc[cc]);
+        for (int i = 0; i < num_vertices_per_cc[cc]; i++) {
+            int vertex_id = cc_vertices[cc][i];
+            int qx = static_cast<int>((std::get<0>(vertex_positions[vertex_id]) - cc_min_x) / ext_x * morton_range);
+            int qy = static_cast<int>((std::get<1>(vertex_positions[vertex_id]) - cc_min_y) / ext_y * morton_range);
+            int qz = static_cast<int>((std::get<2>(vertex_positions[vertex_id]) - cc_min_z) / ext_z * morton_range);
+            morton_codes[i] = morton_code(qx, qy, qz, opt.morton_code_bits_per_dimension);
+        }
+        // Sort vertex indices by their morton code (preserves mapping to cc_vertices)
+        std::vector<int> sorted_indices(num_vertices_per_cc[cc]);
+        std::iota(sorted_indices.begin(), sorted_indices.end(), 0);
+        std::sort(sorted_indices.begin(), sorted_indices.end(), [&morton_codes](int a, int b) {
+            return morton_codes[a] < morton_codes[b];
+        });
+
+        if (num_vertices_per_cc[cc] <= num_seeds_for_cc) {
+            // Fewer vertices than seeds: pick every vertex as a seed
+            for (int i = 0; i < num_vertices_per_cc[cc]; i++) {
+                seeds.push_back(cc_vertices[cc][sorted_indices[i]]);
+            }
+        } else {
+            // Divide sorted order into num_seeds_for_cc equal parts, pick the middle of each
+            int part_size = num_vertices_per_cc[cc] / num_seeds_for_cc;
+            for (int i = 0; i < num_seeds_for_cc; i++) {
+                int mid = i * part_size + part_size / 2;
+                seeds.push_back(cc_vertices[cc][sorted_indices[mid]]);
+            }
+        }
+    }
+
+}
 // -----------------------------------------------------------------------
 // Step 4.4 -- Split oversized clusters.
 //
@@ -222,7 +310,7 @@ void merge_and_split_clusters(
     const std::vector<int>& cluster_sizes,
     int num_clusters,
     int patch_size,
-    int random_seed,
+    const LloydOptions& opt,
     std::vector<int>& seeds)
 {
     int split_clusters = 0;

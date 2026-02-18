@@ -389,45 +389,116 @@ void initialize_seeds_FPS_based(
     }
 }
 // -----------------------------------------------------------------------
-// Step 4.4 -- Split oversized clusters.
-//
-// After some Lloyd iterations, any cluster larger than patch_size gets
-// an extra seed injected at its deepest interior vertex.
+// Step 4.4 -- Merge undersized clusters, then split oversized ones.
 // -----------------------------------------------------------------------
 void merge_and_split_clusters(
     const int* Gp, const int* Gi, int G_N,
-    const std::vector<int>& node_to_cluster,
+    std::vector<int>& node_to_cluster,
     const std::vector<int>& cluster_sizes,
     int num_clusters,
     int patch_size,
     const LloydOptions& opt,
-    std::vector<int>& seeds)
+    std::vector<int>& seeds,
+    std::vector<bool>& cluster_was_merged)
 {
-    int split_clusters = 0;
-    int merge_clusters = 0;
-
-
-    //Go through the seeds, and add a seed to neighbors of that seed
-    //if the neighbor is in the same cluster and 
-    //the cluster size is more than patch_size
-    //then add a new seed to the neighbor
-    std::vector<int> added_seeds;
-    for(int i = 0; i < seeds.size(); i++) {
-        int seed = seeds[i];
-        int cluster_id = node_to_cluster[seed];
-        if (cluster_sizes[cluster_id] < patch_size) {
-            continue;
+    // ── Merge phase ─────────────────────────────────────────────────
+    // 1. Build unique cluster-pair adjacency by scanning all edges.
+    std::vector<std::pair<int,int>> adj_pairs;
+    for (int v = 0; v < G_N; v++) {
+        int cv = node_to_cluster[v];
+        for (int j = Gp[v]; j < Gp[v + 1]; j++) {
+            int cu = node_to_cluster[Gi[j]];
+            if (cv < cu)
+                adj_pairs.push_back({cv, cu});
         }
-        for(int j = Gp[seed]; j < Gp[seed + 1]; j++) {
+    }
+    std::sort(adj_pairs.begin(), adj_pairs.end());
+    adj_pairs.erase(std::unique(adj_pairs.begin(), adj_pairs.end()),
+                    adj_pairs.end());
+
+    // 2. Collect merge candidates (combined size <= patch_size).
+    struct MergeCandidate { int combined; int a; int b; };
+    std::vector<MergeCandidate> candidates;
+    for (auto& [a, b] : adj_pairs) {
+        int combined = cluster_sizes[a] + cluster_sizes[b];
+        if (combined <= patch_size)
+            candidates.push_back({combined, a, b});
+    }
+
+    // 3. Sort by combined size ascending (smallest merges first).
+    std::sort(candidates.begin(), candidates.end(),
+        [](const MergeCandidate& x, const MergeCandidate& y) {
+            return x.combined < y.combined;
+        });
+
+    // 4. Greedy matching -- each cluster participates in at most one merge.
+    cluster_was_merged.assign(num_clusters, false);
+    std::vector<bool> involved(num_clusters, false);
+    std::vector<int> cluster_mapped_to(num_clusters, -1);
+    int merge_count = 0;
+    for (auto& c : candidates) {
+        if (!involved[c.a] && !involved[c.b]) {
+            involved[c.a] = true;
+            involved[c.b] = true;
+            cluster_was_merged[c.b] = true;
+            merge_count++;
+            cluster_mapped_to[c.b] = c.a;
+        }
+    }
+
+    // 5. Remove absorbed seeds via swap-and-pop (descending order).
+    if (merge_count > 0) {
+        std::vector<int> to_remove;
+        to_remove.reserve(merge_count);
+        for (int i = 0; i < num_clusters; i++)
+            if (cluster_was_merged[i])
+                to_remove.push_back(i);
+        std::sort(to_remove.rbegin(), to_remove.rend());
+
+        std::vector<int> slot_occupant(num_clusters);
+        std::iota(slot_occupant.begin(), slot_occupant.end(), 0);
+
+        for (int idx : to_remove) {
+            int last = static_cast<int>(seeds.size()) - 1;
+            if (idx != last) {
+                seeds[idx] = seeds[last];
+                int occupant = slot_occupant[last];
+                slot_occupant[idx] = occupant;
+                cluster_mapped_to[occupant] = idx;
+            }
+            seeds.pop_back();
+        }
+    }
+
+    #pragma omp parallel for
+    for (int v = 0; v < G_N; v++) {
+        int cluster_id = node_to_cluster[v];
+        if (cluster_mapped_to[cluster_id] != -1) {
+            node_to_cluster[v] = cluster_mapped_to[cluster_id];
+        }
+    }
+
+    spdlog::info("  merge_and_split: merged {} cluster pairs", merge_count);
+
+    // ── Split phase ─────────────────────────────────────────────────
+    // Add a new seed at a same-cluster neighbour of each oversized
+    // cluster's seed.  Only consider seeds that survived the merge.
+    std::vector<int> added_seeds;
+    for (int seed : seeds) {
+        int cluster_id = node_to_cluster[seed];
+        if (cluster_sizes[cluster_id] < patch_size)
+            continue;
+        for (int j = Gp[seed]; j < Gp[seed + 1]; j++) {
             int neighbor = Gi[j];
-            if(node_to_cluster[neighbor] == cluster_id) {
+            if (node_to_cluster[neighbor] == cluster_id) {
                 added_seeds.push_back(neighbor);
                 break;
             }
         }
     }
-    //Merge added seeds into the seeds
     seeds.insert(seeds.end(), added_seeds.begin(), added_seeds.end());
+
+    spdlog::info("  merge_and_split: split {} oversized clusters", added_seeds.size());
 }
 
 } // namespace Lloyd

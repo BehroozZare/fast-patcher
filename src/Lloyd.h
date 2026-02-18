@@ -235,12 +235,16 @@ void update_centers(
     const BitArray* active_mask = nullptr);
 
 /**
- * @brief Split oversized clusters and merge undersized ones.
+ * @brief Merge undersized clusters and split oversized ones.
  *
- * For every cluster whose size exceeds @p patch_size, a new seed is
- * injected at a neighbour of the existing seed that belongs to the
- * same cluster.  This forces the next round of BFS to subdivide the
- * oversized region.
+ * **Merge phase**: Adjacent cluster pairs whose combined size does not
+ * exceed @p patch_size are greedily merged, prioritising the pair with
+ * the smallest combined size.  Merging removes one seed (the absorbed
+ * cluster) so the next BFS round reassigns its vertices.
+ *
+ * **Split phase**: For every remaining cluster whose size exceeds
+ * @p patch_size, a new seed is injected at a neighbour of the existing
+ * seed that belongs to the same cluster.
  *
  * @param Gp              Row pointers of the CSR adjacency.
  * @param Gi              Column indices of the CSR adjacency.
@@ -250,15 +254,20 @@ void update_centers(
  * @param num_clusters    Total number of clusters before this call.
  * @param patch_size      Maximum allowed cluster size.
  * @param opt             Algorithm options.
- * @param[in,out] seeds   Seed list; new seeds are appended for split clusters.
+ * @param[in,out] seeds   Seed list; absorbed seeds are removed, new
+ *                        seeds are appended for split clusters.
+ * @param[out] cluster_was_merged  Resized to @p num_clusters.  Entry
+ *                        [i] is true iff cluster i was absorbed into a
+ *                        neighbour during the merge phase.
  */
 void merge_and_split_clusters(
     const int* Gp, const int* Gi, int G_N,
-    const std::vector<int>& node_to_cluster,
+    std::vector<int>& node_to_cluster,
     const std::vector<int>& cluster_sizes,
     int num_clusters,
     int patch_size,
     const LloydOptions& opt,
-    std::vector<int>& seeds);
+    std::vector<int>& seeds,
+    std::vector<bool>& cluster_was_merged);
 
 } // namespace Lloyd

@@ -153,19 +153,22 @@ void create_clusters(
 
         // Step 4.4: Merge and Split clusters
         auto split_start = std::chrono::high_resolution_clock::now();
+        std::vector<bool> cluster_was_merged;
         Lloyd::merge_and_split_clusters(
             Gp, Gi, n, node_to_cluster,
-            cluster_sizes, seeds.size(), patch_size, *opt, seeds);
+            cluster_sizes, seeds.size(), patch_size, *opt, seeds,
+            cluster_was_merged);
         auto split_end = std::chrono::high_resolution_clock::now();
         double split_ms = std::chrono::duration<double, std::milli>(split_end - split_start).count();
-        spdlog::info("Outer iteration {}: merge_and_split {:.2f} ms, #seeds after split={}",
+        spdlog::info("Outer iteration {}: merge_and_split {:.2f} ms, #seeds after={}",
                      iter, split_ms, seeds.size());
 
-        // Rebuild the active mask: only vertices in oversized clusters
-        // are active for the next round of Lloyd iterations.
+        // Rebuild the active mask: only oversized clusters need splitting.
+        // Merged clusters are already correctly assigned with updated centers.
         active_mask.clear_all();
         for (int v = 0; v < n; v++) {
-            if (cluster_sizes[node_to_cluster[v]] >= patch_size)
+            int cid = node_to_cluster[v];
+            if (cluster_sizes[cid] >= patch_size)
                 active_mask.set(v);
         }
     }

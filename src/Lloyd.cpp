@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <numeric>
 #include <cassert>
+#include <limits>
 #include <omp.h>
 #include <spdlog/spdlog.h>
 
@@ -117,6 +118,63 @@ void restricted_bfs(
     }
     std::swap(current_queue, final_wave_vertices);
     current_queue.clear();
+}
+
+
+void furthest_point_bfs(const int* Gp, const int* Gi, int G_N,
+    const int& start_node,
+    std::vector<int>& dist,
+    int& furthest_distance,
+    int& furthest_node){
+
+    Lloyd::BitArray visited(G_N);
+    visited.set(start_node);
+    dist[start_node] = 0;
+    std::vector<int> current_queue{start_node};
+    std::vector<int> next_queue;
+
+    #pragma omp parallel
+    {
+        std::vector<int> local_next_queue;
+        while (!current_queue.empty()) {
+            #pragma omp for nowait
+            for (int i = 0; i < (int)current_queue.size(); i++) {
+                int v = current_queue[i];
+                for (int j = Gp[v]; j < Gp[v + 1]; j++) {
+                    int u = Gi[j];
+                    if (!visited.get(u)) {
+                        visited.set(u);
+                        if(dist[u] > dist[v] + 1) {
+                            dist[u]  = dist[v] + 1;
+                            local_next_queue.push_back(u);
+                        }
+                    }
+                }
+            }
+            #pragma omp critical
+            {
+                next_queue.insert(next_queue.end(),
+                    local_next_queue.begin(), local_next_queue.end());
+                local_next_queue.clear();
+            }
+            #pragma omp barrier
+            #pragma omp single
+            {
+                std::swap(current_queue, next_queue);
+                next_queue.clear();
+            }
+        }
+    }
+
+    // Post-BFS: scan all vertices to find the true argmax of min-distance
+    furthest_distance = 0;
+    furthest_node = start_node;
+    for (int v = 0; v < G_N; v++) {
+        if (dist[v] != std::numeric_limits<int>::max() && dist[v] > furthest_distance) {
+            furthest_distance = dist[v];
+            furthest_node = v;
+        }
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -232,11 +290,10 @@ void initialize_seeds_morton_code(
     const std::vector<std::tuple<double, double, double>>& vertex_positions,
     int patch_size,
     const LloydOptions& opt,
-    std::vector<int>& seeds)
+    std::vector<int>& seeds,
+    std::vector<int>& sorted_indices)
 {
     seeds.clear();
-    //Set the random seed
-    std::mt19937 rng(opt.random_seed);
     int morton_range = (1 << opt.morton_code_bits_per_dimension) - 1;
     // Group vertices by their CC
     std::vector<std::vector<int>> cc_vertices(num_vertices_per_cc.size());
@@ -276,7 +333,7 @@ void initialize_seeds_morton_code(
             morton_codes[i] = morton_code(qx, qy, qz, opt.morton_code_bits_per_dimension);
         }
         // Sort vertex indices by their morton code (preserves mapping to cc_vertices)
-        std::vector<int> sorted_indices(num_vertices_per_cc[cc]);
+        sorted_indices.resize(num_vertices_per_cc[cc]);
         std::iota(sorted_indices.begin(), sorted_indices.end(), 0);
         std::sort(sorted_indices.begin(), sorted_indices.end(), [&morton_codes](int a, int b) {
             return morton_codes[a] < morton_codes[b];
@@ -297,6 +354,39 @@ void initialize_seeds_morton_code(
         }
     }
 
+}
+
+void initialize_seeds_FPS_based(
+    const int* Gp, const int* Gi, int G_N,
+    const std::vector<int>& vertex_to_cc,
+    const std::vector<int>& num_vertices_per_cc,
+    const std::vector<std::tuple<double, double, double>>& vertex_positions,
+    int patch_size,
+    const LloydOptions& opt,
+    std::vector<int>& seeds)
+{
+    seeds.clear();
+    for(int i = 0; i < num_vertices_per_cc.size(); i++) {
+        //Pick seeds per each CC using the FPS algorithm
+        //Step 0: Find a single node from the CC to start the FPS algorithm
+        int start_node = -1;
+        for(int j = 0; j < G_N; j++) {
+            if(vertex_to_cc[j] == i) {
+                start_node = j;
+                break;
+            }
+        }
+        //Step 1: Find then umber of seeds to pick for this CC
+        int num_seeds_for_cc = std::ceil(static_cast<double>(num_vertices_per_cc[i]) / static_cast<double>(patch_size));
+        //Step 2: Iteratively find the seeds by finding the farthest node from the current seed
+        int furthest_distance = 0;
+        int furthest_node = start_node;
+        std::vector<int> dist(G_N, std::numeric_limits<int>::max());
+        for(int j = 0; j < num_seeds_for_cc; j++) {
+            Lloyd::furthest_point_bfs(Gp, Gi, G_N, furthest_node, dist, furthest_distance, furthest_node);
+            seeds.push_back(furthest_node);
+        }
+    }
 }
 // -----------------------------------------------------------------------
 // Step 4.4 -- Split oversized clusters.

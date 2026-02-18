@@ -33,7 +33,7 @@ struct CLIArgs
         app.add_option("-i,--input", input_mesh, "input mesh file (.mesh for tet, .obj/.off/.ply/.stl for triangle)")->required();
         app.add_option("-o,--output", output_dir, "output directory for patch files");
         app.add_option("-z,--patch_size", patch_size, "maximum patch size");
-        app.add_option("-s,--seed", seed_method, "seed selection method: 'random' or 'morton' (default: morton)");
+        app.add_option("-s,--seed", seed_method, "seed selection method: 'random', 'morton', or 'fps' (default: morton)");
         app.add_option("-l,--lloyd_iters", lloyd_iters_to_add_seed, "Lloyd iterations before checking oversized clusters (default: 2)");
 
         try {
@@ -159,6 +159,8 @@ int main(int argc, char* argv[])
     LloydOptions opts;
     if (args.seed_method == "morton") {
         opts.seed_selection_method = LloydOptions::SeedSelectionMethod::MORTON_CODE;
+    } else if (args.seed_method == "fps") {
+        opts.seed_selection_method = LloydOptions::SeedSelectionMethod::FPS;
     } else {
         opts.seed_selection_method = LloydOptions::SeedSelectionMethod::RANDOM;
     }

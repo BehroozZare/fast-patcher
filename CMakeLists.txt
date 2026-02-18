@@ -76,3 +76,35 @@ target_link_libraries(test_cluster PRIVATE
     CLI11::CLI11
     polyscope
 )
+
+add_executable(test_morton_cluster demo/test_morton_cluster.cpp)
+target_include_directories(test_morton_cluster PRIVATE demo/utils/)
+target_link_libraries(test_morton_cluster PRIVATE
+    fast_patcher_lib
+    igl::core
+    Eigen3::Eigen
+    spdlog::spdlog
+    CLI11::CLI11
+    polyscope
+)
+
+add_executable(test_morton_on_grid demo/test_morton_on_grid.cpp)
+target_include_directories(test_morton_on_grid PRIVATE demo/utils/)
+target_link_libraries(test_morton_on_grid PRIVATE
+    fast_patcher_lib
+    Eigen3::Eigen
+    spdlog::spdlog
+    CLI11::CLI11
+    polyscope
+)
+
+add_executable(test_fps_on_mesh demo/test_fps_on_mesh.cpp)
+target_include_directories(test_fps_on_mesh PRIVATE demo/utils/)
+target_link_libraries(test_fps_on_mesh PRIVATE
+    fast_patcher_lib
+    igl::core
+    Eigen3::Eigen
+    spdlog::spdlog
+    CLI11::CLI11
+    polyscope
+)

@@ -47,11 +47,19 @@ void create_clusters(
 
 
     std::vector<int> seeds;
+    std::vector<int> sorted_indices;
     if (vertex_positions != nullptr &&
         opt->seed_selection_method == LloydOptions::SeedSelectionMethod::MORTON_CODE) {
         spdlog::info("Seed selection: Morton code");
         Lloyd::initialize_seeds_morton_code(
             vertex_to_cc, num_vertices_per_cc, *vertex_positions,
+            patch_size, *opt, seeds, sorted_indices);
+    } else if (opt->seed_selection_method == LloydOptions::SeedSelectionMethod::FPS) {
+        spdlog::info("Seed selection: FPS (farthest point sampling)");
+        Lloyd::initialize_seeds_FPS_based(
+            Gp, Gi, n,
+            vertex_to_cc, num_vertices_per_cc,
+            vertex_positions ? *vertex_positions : std::vector<std::tuple<double,double,double>>(),
             patch_size, *opt, seeds);
     } else {
         if (opt->seed_selection_method == LloydOptions::SeedSelectionMethod::MORTON_CODE

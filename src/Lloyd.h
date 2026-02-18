@@ -15,7 +15,8 @@ struct LloydOptions {
      */
     enum class SeedSelectionMethod {
         RANDOM,      ///< Pick seeds uniformly at random within each connected component.
-        MORTON_CODE  ///< Pick seeds along a space-filling Morton (Z-order) curve.
+        MORTON_CODE, ///< Pick seeds along a space-filling Morton (Z-order) curve.
+        FPS          ///< Pick seeds via farthest point sampling on graph distances.
     };
 
     SeedSelectionMethod seed_selection_method = SeedSelectionMethod::RANDOM; ///< Seed selection strategy (default: RANDOM).
@@ -117,6 +118,16 @@ void restricted_bfs(
  *
  * @see initialize_seeds_morton_code
  */
+
+
+void furthest_point_bfs(const int* Gp, const int* Gi, int G_N,
+    const int& start_node,
+    std::vector<int>& dist,
+    int& furthest_distance,
+    int& furthest_node);
+
+
+
 void initialize_seeds_random(
     const std::vector<int>& vertex_to_cc,
     const std::vector<int>& num_vertices_per_cc,
@@ -156,6 +167,34 @@ int morton_code(int x, int y, int z, int num_bits);
  * @see initialize_seeds_random, morton_code
  */
 void initialize_seeds_morton_code(
+    const std::vector<int>& vertex_to_cc,
+    const std::vector<int>& num_vertices_per_cc,
+    const std::vector<std::tuple<double, double, double>>& vertex_positions,
+    int patch_size,
+    const LloydOptions& opt,
+    std::vector<int>& seeds,
+    std::vector<int>& sorted_indices);
+
+
+/**
+ * @brief Select initial cluster seeds using a furthest point sampling-based algorithm.
+ *
+ * Vertices within each connected component are sampled using the furthest point sampling algorithm (FPS).
+ *
+ * @param Gp                  Row pointers of the CSR adjacency.
+ * @param Gi                  Column indices of the CSR adjacency.
+ * @param G_N                 Number of vertices.
+ * @param vertex_to_cc         CC label for every vertex.
+ * @param num_vertices_per_cc  Number of vertices in each CC.
+ * @param vertex_positions     3D positions for all vertices (x, y, z).
+ * @param patch_size           Target maximum cluster size.
+ * @param opt                  Algorithm options (uses random_seed).
+ * @param[out] seeds           Populated with the chosen seed vertex indices.
+ *
+ * @see initialize_seeds_random, initialize_seeds_morton_code
+ */
+void initialize_seeds_FPS_based(
+    const int* Gp, const int* Gi, int G_N,
     const std::vector<int>& vertex_to_cc,
     const std::vector<int>& num_vertices_per_cc,
     const std::vector<std::tuple<double, double, double>>& vertex_positions,
